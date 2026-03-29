@@ -1,3 +1,8 @@
 {
-  "css.lint.unknownAtRules": "ignore"
+  "css.lint.unknownAtRules": "ignore",
+  "json.maxItemsComputed": 50000,
+  "files.associations": {
+    "package-lock.json": "plaintext",
+    "yarn.lock": "plaintext"
+  }
 }
