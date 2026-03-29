@@ -7,7 +7,17 @@ import { createClient } from "@supabase/supabase-js";
 dotenv.config();
 
 const app = express();
-app.use(cors({ origin: "http://localhost:5173" }));
+app.use(cors({ origin: ["http://localhost:5173", "http://localhost:4173"] }));
+
+// Health check
+app.get("/api/health", (req, res) => {
+  res.json({
+    ok: true,
+    supabaseUrl: process.env.SUPABASE_URL ? "set" : "MISSING",
+    supabaseKey: process.env.SUPABASE_SERVICE_ROLE_KEY ? process.env.SUPABASE_SERVICE_ROLE_KEY.slice(0, 10) + "..." : "MISSING",
+    picsartKey: process.env.PICSART_API_KEY ? "set" : "MISSING",
+  });
+});
 app.use(express.json());
 
 // Add the Clerk middleware before any requireAuth endpoints
@@ -154,6 +164,7 @@ app.post("/api/generate", requireAuth(), async (req, res) => {
 
 app.get("/api/generations", requireAuth(), async (req, res) => {
   const userId = req.auth().userId;
+  console.log("[GET /api/generations] userId:", userId);
 
   const { data, error } = await supabase
     .from("generations")
@@ -163,9 +174,10 @@ app.get("/api/generations", requireAuth(), async (req, res) => {
     .limit(20);
 
   if (error) {
-    console.error(error);
+    console.error("[Supabase generations error]", JSON.stringify(error, null, 2));
     return res.status(500).json({ error: error.message });
   }
+  console.log("[GET /api/generations] returned", data?.length, "rows");
   res.json({ generations: data });
 });
 
