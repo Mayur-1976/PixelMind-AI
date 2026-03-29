@@ -7,7 +7,10 @@ import { createClient } from "@supabase/supabase-js";
 dotenv.config();
 
 const app = express();
-app.use(cors({ origin: ["http://localhost:5173", "http://localhost:4173"] }));
+const CORS_ORIGIN = process.env.CORS_ORIGIN
+  ? process.env.CORS_ORIGIN.split(",")
+  : ["http://localhost:5173", "http://localhost:4173"];
+app.use(cors({ origin: CORS_ORIGIN, credentials: true }));
 
 // Health check
 app.get("/api/health", (req, res) => {
@@ -207,4 +210,5 @@ app.delete("/api/generations/:id", requireAuth(), async (req, res) => {
   }
 });
 
-app.listen(3001, () => console.log("Server running on port 3001"));
+const PORT = process.env.PORT || 3001;
+app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
