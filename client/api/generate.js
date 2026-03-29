@@ -9,7 +9,9 @@ export default async function handler(req, res) {
   }
 
   const userId = await verifyAuth(req);
-  if (!userId) return res.status(401).json({ error: "Unauthorized" });
+  if (!userId) {
+    return res.status(401).json({ error: "Unauthorized — Clerk token verification failed. Check CLERK_SECRET_KEY env var." });
+  }
 
   const { prompt, style } = req.body;
   if (!prompt) return res.status(400).json({ error: "Prompt is required" });
