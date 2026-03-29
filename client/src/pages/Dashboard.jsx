@@ -52,6 +52,8 @@ export default function Dashboard() {
     setGeneratedImage(null);
     try {
       const token = await getToken();
+      
+      // Step 1: Start generation
       const res = await fetch(`${API_URL}/generate`, {
         method: "POST",
         headers: {
@@ -67,9 +69,52 @@ export default function Dashboard() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Generation failed");
       
-      setGeneratedImage(data);
-      showToast("✨ Image generated!", "success");
-      fetchGenerations(); // Refresh gallery
+      // If image was ready instantly
+      if (data.imageUrl) {
+        setGeneratedImage(data);
+        showToast("✨ Image generated!", "success");
+        fetchGenerations();
+        return;
+      }
+      
+      // Step 2: Image still processing — poll for result
+      if (data.status === "processing" && data.inferenceId) {
+        showToast("⏳ Generating your image...", "neutral");
+        
+        for (let i = 0; i < 40; i++) {
+          await new Promise(r => setTimeout(r, 3000));
+          
+          const pollRes = await fetch(`${API_URL}/generate-status`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "Authorization": `Bearer ${token}`
+            },
+            body: JSON.stringify({
+              inferenceId: data.inferenceId,
+              prompt,
+              style: selectedStyle,
+            })
+          });
+          
+          const pollData = await pollRes.json();
+          
+          if (pollData.status === "completed") {
+            setGeneratedImage(pollData);
+            showToast("✨ Image generated!", "success");
+            fetchGenerations();
+            return;
+          }
+          
+          if (pollData.status === "failed") {
+            throw new Error("Image generation failed");
+          }
+          
+          // Still processing — continue polling
+        }
+        
+        throw new Error("Image generation timed out — please try again");
+      }
     } catch (err) {
       console.error(err);
       showToast(err.message || "❌ Error generating image", "error");

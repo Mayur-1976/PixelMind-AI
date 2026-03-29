@@ -1,5 +1,19 @@
 import { setCors, verifyAuth, supabase } from "./_lib/auth.js";
 
+// Helper: recursively find any image URL in the response object
+function findImageUrl(obj) {
+  if (!obj || typeof obj !== "object") return null;
+  if (typeof obj.url === "string" && obj.url.startsWith("http")) return obj.url;
+  for (const value of Object.values(obj)) {
+    if (typeof value === "string" && value.startsWith("https://cdn")) return value;
+    if (typeof value === "object") {
+      const found = findImageUrl(value);
+      if (found) return found;
+    }
+  }
+  return null;
+}
+
 export default async function handler(req, res) {
   setCors(res);
   if (req.method === "OPTIONS") return res.status(200).end();
@@ -10,7 +24,7 @@ export default async function handler(req, res) {
 
   const userId = await verifyAuth(req);
   if (!userId) {
-    return res.status(401).json({ error: "Unauthorized — Clerk token verification failed. Check CLERK_SECRET_KEY env var." });
+    return res.status(401).json({ error: "Unauthorized" });
   }
 
   const { prompt, style } = req.body;
@@ -19,7 +33,7 @@ export default async function handler(req, res) {
   const finalPrompt = style ? `${prompt}, style: ${style}` : prompt;
 
   try {
-    // Call Picsart Text2Image API
+    // Step 1: Send request to Picsart
     const response = await fetch("https://genai-api.picsart.io/v1/text2image", {
       method: "POST",
       headers: {
@@ -44,86 +58,62 @@ export default async function handler(req, res) {
     const initResult = await response.json();
     console.log("Picsart response:", JSON.stringify(initResult, null, 2));
 
-    function findImageUrl(obj) {
-      if (!obj || typeof obj !== "object") return null;
-      if (typeof obj.url === "string" && obj.url.startsWith("http")) return obj.url;
-      for (const value of Object.values(obj)) {
-        if (typeof value === "string" && value.startsWith("https://cdn")) return value;
-        if (typeof value === "object") {
-          const found = findImageUrl(value);
-          if (found) return found;
-        }
-      }
-      return null;
+    // Step 2: Check if image is already ready (synchronous response)
+    const imageUrl = findImageUrl(initResult);
+
+    if (imageUrl) {
+      // Image ready immediately — save to Supabase and return
+      const result = await saveImage(userId, imageUrl, prompt, style);
+      return res.json(result);
     }
 
-    let imageUrl = findImageUrl(initResult);
-
-    // Poll if async
-    if (!imageUrl && initResult.inference_id) {
-      const inferenceId = initResult.inference_id;
-      for (let i = 0; i < 30; i++) {
-        await new Promise((resolve) => setTimeout(resolve, 3000));
-        try {
-          const pollResponse = await fetch(
-            `https://genai-api.picsart.io/v1/text2image/inferences/${inferenceId}`,
-            {
-              headers: {
-                accept: "application/json",
-                "x-picsart-api-key": process.env.PICSART_API_KEY,
-              },
-            }
-          );
-          if (!pollResponse.ok) continue;
-          const pollResult = await pollResponse.json();
-          if (pollResult.status === "failed") {
-            return res.status(500).json({ error: "Image generation failed" });
-          }
-          imageUrl = findImageUrl(pollResult);
-          if (imageUrl) break;
-        } catch (pollErr) {
-          console.error("Poll error:", pollErr.message);
-        }
-      }
+    // Step 3: Image not ready yet — return the inference_id for polling
+    if (initResult.inference_id) {
+      return res.json({
+        status: "processing",
+        inferenceId: initResult.inference_id,
+        prompt,
+        style: style || null,
+      });
     }
 
-    if (!imageUrl) {
-      return res.status(500).json({ error: "Image generation timed out" });
-    }
-
-    // Download and upload to Supabase
-    const imageResponse = await fetch(imageUrl);
-    const arrayBuffer = await imageResponse.arrayBuffer();
-    const buffer = Buffer.from(arrayBuffer);
-    const fileName = `${userId}/${Date.now()}.png`;
-
-    const { error: uploadError } = await supabase.storage
-      .from("generated-images")
-      .upload(fileName, buffer, { contentType: "image/png" });
-
-    if (uploadError) {
-      console.error(uploadError);
-      return res.status(500).json({ error: "Failed to upload image" });
-    }
-
-    const {
-      data: { publicUrl },
-    } = supabase.storage.from("generated-images").getPublicUrl(fileName);
-
-    const { data: generation, error: dbError } = await supabase
-      .from("generations")
-      .insert({ user_id: userId, prompt, style: style || null, image_url: publicUrl })
-      .select()
-      .single();
-
-    if (dbError) {
-      console.error(dbError);
-      return res.status(500).json({ error: "Database error" });
-    }
-
-    return res.json({ imageUrl: publicUrl, generation });
+    return res.status(500).json({ error: "Unexpected API response" });
   } catch (err) {
     console.error(err);
     return res.status(500).json({ error: "Generation failed" });
   }
+}
+
+// Save image to Supabase storage and database
+async function saveImage(userId, imageUrl, prompt, style) {
+  const imageResponse = await fetch(imageUrl);
+  const arrayBuffer = await imageResponse.arrayBuffer();
+  const buffer = Buffer.from(arrayBuffer);
+  const fileName = `${userId}/${Date.now()}.png`;
+
+  const { error: uploadError } = await supabase.storage
+    .from("generated-images")
+    .upload(fileName, buffer, { contentType: "image/png" });
+
+  if (uploadError) {
+    console.error(uploadError);
+    throw new Error("Failed to upload image");
+  }
+
+  const {
+    data: { publicUrl },
+  } = supabase.storage.from("generated-images").getPublicUrl(fileName);
+
+  const { data: generation, error: dbError } = await supabase
+    .from("generations")
+    .insert({ user_id: userId, prompt, style: style || null, image_url: publicUrl })
+    .select()
+    .single();
+
+  if (dbError) {
+    console.error(dbError);
+    throw new Error("Database error");
+  }
+
+  return { imageUrl: publicUrl, generation };
 }

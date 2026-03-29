@@ -31,6 +31,53 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY || "placeholder"
 );
 
+// Helper: recursively find any image URL in the response object
+function findImageUrl(obj) {
+  if (!obj || typeof obj !== 'object') return null;
+  if (typeof obj.url === 'string' && obj.url.startsWith('http')) return obj.url;
+  for (const value of Object.values(obj)) {
+    if (typeof value === 'string' && value.startsWith('https://cdn')) return value;
+    if (typeof value === 'object') {
+      const found = findImageUrl(value);
+      if (found) return found;
+    }
+  }
+  return null;
+}
+
+async function saveImage(userId, imageUrl, prompt, style) {
+  const imageResponse = await fetch(imageUrl);
+  const arrayBuffer = await imageResponse.arrayBuffer();
+  const buffer = Buffer.from(arrayBuffer);
+  const fileName = `${userId}/${Date.now()}.png`;
+
+  const { error: uploadError } = await supabase.storage
+    .from("generated-images")
+    .upload(fileName, buffer, { contentType: "image/png" });
+
+  if (uploadError) {
+    console.error(uploadError);
+    throw new Error("Failed to upload image");
+  }
+
+  const { data: { publicUrl } } = supabase.storage
+    .from("generated-images")
+    .getPublicUrl(fileName);
+
+  const { data: generation, error: dbError } = await supabase
+    .from("generations")
+    .insert({ user_id: userId, prompt, style: style || null, image_url: publicUrl })
+    .select()
+    .single();
+
+  if (dbError) {
+    console.error(dbError);
+    throw new Error("Database error");
+  }
+
+  return { imageUrl: publicUrl, generation };
+}
+
 app.post("/api/generate", requireAuth(), async (req, res) => {
   const userId = req.auth().userId;
   const { prompt, style } = req.body;
@@ -40,7 +87,6 @@ app.post("/api/generate", requireAuth(), async (req, res) => {
   const finalPrompt = style ? `${prompt}, style: ${style}` : prompt;
 
   try {
-    // Call Picsart Text2Image API
     const response = await fetch("https://genai-api.picsart.io/v1/text2image", {
       method: 'POST',
       headers: {
@@ -57,111 +103,75 @@ app.post("/api/generate", requireAuth(), async (req, res) => {
     });
 
     if (!response.ok) {
-        const errorText = await response.text();
-        console.error("Picsart API Error:", response.status, errorText);
-        return res.status(response.status).json({ error: "Image generation failed" });
+      const errorText = await response.text();
+      console.error("Picsart API Error:", response.status, errorText);
+      return res.status(response.status).json({ error: "Image generation failed" });
     }
 
     const initResult = await response.json();
     console.log("Picsart response:", JSON.stringify(initResult, null, 2));
 
-    // Helper: recursively find any image URL in the response object
-    function findImageUrl(obj) {
-      if (!obj || typeof obj !== 'object') return null;
-      if (typeof obj.url === 'string' && obj.url.startsWith('http')) return obj.url;
-      for (const value of Object.values(obj)) {
-        if (typeof value === 'string' && value.startsWith('https://cdn')) return value;
-        if (typeof value === 'object') {
-          const found = findImageUrl(value);
-          if (found) return found;
-        }
-      }
-      return null;
+    const imageUrl = findImageUrl(initResult);
+
+    if (imageUrl) {
+      const result = await saveImage(userId, imageUrl, prompt, style);
+      return res.json(result);
     }
 
-    // Try to find image URL directly in the initial response
-    let imageUrl = findImageUrl(initResult);
-
-    // If no image URL found and we have an inference_id, poll for results
-    if (!imageUrl && initResult.inference_id) {
-      const inferenceId = initResult.inference_id;
-      console.log("Polling for inference:", inferenceId);
-
-      for (let i = 0; i < 30; i++) {
-        await new Promise(resolve => setTimeout(resolve, 3000));
-
-        try {
-          const pollResponse = await fetch(
-            `https://genai-api.picsart.io/v1/text2image/inferences/${inferenceId}`,
-            {
-              headers: {
-                'accept': 'application/json',
-                'x-picsart-api-key': process.env.PICSART_API_KEY,
-              },
-            }
-          );
-
-          if (!pollResponse.ok) {
-            console.error("Poll error:", pollResponse.status);
-            continue;
-          }
-
-          const pollResult = await pollResponse.json();
-          console.log(`Poll ${i + 1}:`, JSON.stringify(pollResult, null, 2));
-
-          if (pollResult.status === "failed") {
-            return res.status(500).json({ error: "Image generation failed" });
-          }
-
-          imageUrl = findImageUrl(pollResult);
-          if (imageUrl) break;
-        } catch (pollErr) {
-          console.error("Poll fetch error:", pollErr.message);
-        }
-      }
+    if (initResult.inference_id) {
+      return res.json({
+        status: "processing",
+        inferenceId: initResult.inference_id,
+        prompt,
+        style: style || null,
+      });
     }
 
-    if (!imageUrl) {
-      console.error("Could not find image URL in response:", initResult);
-      return res.status(500).json({ error: "Image generation timed out" });
-    }
-
-    console.log("Found image URL:", imageUrl);
-
-    // Download the generated image from Picsart CDN
-    const imageResponse = await fetch(imageUrl);
-    const arrayBuffer = await imageResponse.arrayBuffer();
-    const buffer = Buffer.from(arrayBuffer);
-    const fileName = `${userId}/${Date.now()}.png`;
-
-        const { error: uploadError } = await supabase.storage
-          .from("generated-images")
-          .upload(fileName, buffer, { contentType: "image/png" });
-        
-        if (uploadError) {
-            console.error(uploadError);
-            return res.status(500).json({ error: "Failed to upload image" })
-        }
-
-        const { data: { publicUrl } } = supabase.storage
-          .from("generated-images")
-          .getPublicUrl(fileName);
-
-        const { data: generation, error: dbError } = await supabase
-          .from("generations")
-          .insert({ user_id: userId, prompt, style: style || null, image_url: publicUrl })
-          .select()
-          .single();
-          
-        if (dbError) {
-          console.error(dbError);
-          return res.status(500).json({ error: "Database error" });
-        }
-
-        return res.json({ imageUrl: publicUrl, generation });
+    return res.status(500).json({ error: "Unexpected API response" });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "Generation failed" });
+  }
+});
+
+app.post("/api/generate-status", requireAuth(), async (req, res) => {
+  const userId = req.auth().userId;
+  const { inferenceId, prompt, style } = req.body;
+
+  if (!inferenceId) return res.status(400).json({ error: "inferenceId is required" });
+
+  try {
+    const pollResponse = await fetch(
+      `https://genai-api.picsart.io/v1/text2image/inferences/${inferenceId}`,
+      {
+        headers: {
+          'accept': 'application/json',
+          'x-picsart-api-key': process.env.PICSART_API_KEY,
+        },
+      }
+    );
+
+    if (!pollResponse.ok) {
+      return res.json({ status: "processing" });
+    }
+
+    const pollResult = await pollResponse.json();
+
+    if (pollResult.status === "failed") {
+      return res.status(500).json({ status: "failed", error: "Image generation failed" });
+    }
+
+    const imageUrl = findImageUrl(pollResult);
+
+    if (!imageUrl) {
+      return res.json({ status: "processing" });
+    }
+
+    const result = await saveImage(userId, imageUrl, prompt || "", style);
+    return res.json({ status: "completed", ...result });
+  } catch (err) {
+    console.error("Poll error:", err);
+    return res.status(500).json({ error: "Poll failed" });
   }
 });
 
