@@ -27,27 +27,34 @@ app.post("/api/generate", requireAuth(), async (req, res) => {
   const finalPrompt = style ? `${prompt}, style: ${style}` : prompt;
 
   try {
-    // Call Stability AI API
-    const formData = new FormData();
-    formData.append('prompt', finalPrompt);
-    formData.append('output_format', 'png');
-
-    const response = await fetch("https://api.stability.ai/v2beta/stable-image/generate/core", {
+    // Call Picsart Text2Image API
+    const response = await fetch("https://genai-api.picsart.io/v1/text2image", {
       method: 'POST',
       headers: {
-        Authorization: `Bearer ${process.env.STABILITY_API_KEY}`,
-        Accept: "image/*"
+        'accept': 'application/json',
+        'x-picsart-api-key': process.env.PICSART_API_KEY,
+        'content-type': 'application/json',
       },
-      body: formData,
+      body: JSON.stringify({
+        prompt: finalPrompt,
+        width: 1024,
+        height: 1024,
+        count: 1,
+      }),
     });
 
     if (!response.ok) {
         const errorText = await response.text();
-        console.error("Stability API Error:", errorText);
+        console.error("Picsart API Error:", errorText);
         return res.status(response.status).json({ error: "Image generation failed" });
     }
 
-    const arrayBuffer = await response.arrayBuffer();
+    const result = await response.json();
+    const imageUrl = result.data.images[0].url;
+
+    // Download the generated image from Picsart CDN
+    const imageResponse = await fetch(imageUrl);
+    const arrayBuffer = await imageResponse.arrayBuffer();
     const buffer = Buffer.from(arrayBuffer);
     const fileName = `${userId}/${Date.now()}.png`;
 
