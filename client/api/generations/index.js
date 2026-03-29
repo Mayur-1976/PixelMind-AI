@@ -1,4 +1,4 @@
-import { setCors, verifyAuth, supabase } from "./_lib/auth.js";
+import { setCors, verifyAuth, supabase } from "../_lib/auth.js";
 
 export default async function handler(req, res) {
   setCors(res);
