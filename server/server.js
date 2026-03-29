@@ -45,12 +45,27 @@ app.post("/api/generate", requireAuth(), async (req, res) => {
 
     if (!response.ok) {
         const errorText = await response.text();
-        console.error("Picsart API Error:", errorText);
+        console.error("Picsart API Error:", response.status, errorText);
         return res.status(response.status).json({ error: "Image generation failed" });
     }
 
     const result = await response.json();
-    const imageUrl = result.data.images[0].url;
+    console.log("Picsart API Response:", JSON.stringify(result, null, 2));
+
+    // Handle different possible response formats
+    let imageUrl;
+    if (result.data?.images?.[0]?.url) {
+      imageUrl = result.data.images[0].url;
+    } else if (result.data?.[0]?.url) {
+      imageUrl = result.data[0].url;
+    } else if (result.images?.[0]?.url) {
+      imageUrl = result.images[0].url;
+    } else if (result.data?.url) {
+      imageUrl = result.data.url;
+    } else {
+      console.error("Unexpected Picsart response format:", result);
+      return res.status(500).json({ error: "Unexpected API response format" });
+    }
 
     // Download the generated image from Picsart CDN
     const imageResponse = await fetch(imageUrl);
