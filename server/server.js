@@ -49,23 +49,71 @@ app.post("/api/generate", requireAuth(), async (req, res) => {
         return res.status(response.status).json({ error: "Image generation failed" });
     }
 
-    const result = await response.json();
-    console.log("Picsart API Response:", JSON.stringify(result, null, 2));
+    const initResult = await response.json();
+    console.log("Picsart response:", JSON.stringify(initResult, null, 2));
 
-    // Handle different possible response formats
-    let imageUrl;
-    if (result.data?.images?.[0]?.url) {
-      imageUrl = result.data.images[0].url;
-    } else if (result.data?.[0]?.url) {
-      imageUrl = result.data[0].url;
-    } else if (result.images?.[0]?.url) {
-      imageUrl = result.images[0].url;
-    } else if (result.data?.url) {
-      imageUrl = result.data.url;
-    } else {
-      console.error("Unexpected Picsart response format:", result);
-      return res.status(500).json({ error: "Unexpected API response format" });
+    // Helper: recursively find any image URL in the response object
+    function findImageUrl(obj) {
+      if (!obj || typeof obj !== 'object') return null;
+      if (typeof obj.url === 'string' && obj.url.startsWith('http')) return obj.url;
+      for (const value of Object.values(obj)) {
+        if (typeof value === 'string' && value.startsWith('https://cdn')) return value;
+        if (typeof value === 'object') {
+          const found = findImageUrl(value);
+          if (found) return found;
+        }
+      }
+      return null;
     }
+
+    // Try to find image URL directly in the initial response
+    let imageUrl = findImageUrl(initResult);
+
+    // If no image URL found and we have an inference_id, poll for results
+    if (!imageUrl && initResult.inference_id) {
+      const inferenceId = initResult.inference_id;
+      console.log("Polling for inference:", inferenceId);
+
+      for (let i = 0; i < 30; i++) {
+        await new Promise(resolve => setTimeout(resolve, 3000));
+
+        try {
+          const pollResponse = await fetch(
+            `https://genai-api.picsart.io/v1/text2image/inferences/${inferenceId}`,
+            {
+              headers: {
+                'accept': 'application/json',
+                'x-picsart-api-key': process.env.PICSART_API_KEY,
+              },
+            }
+          );
+
+          if (!pollResponse.ok) {
+            console.error("Poll error:", pollResponse.status);
+            continue;
+          }
+
+          const pollResult = await pollResponse.json();
+          console.log(`Poll ${i + 1}:`, JSON.stringify(pollResult, null, 2));
+
+          if (pollResult.status === "failed") {
+            return res.status(500).json({ error: "Image generation failed" });
+          }
+
+          imageUrl = findImageUrl(pollResult);
+          if (imageUrl) break;
+        } catch (pollErr) {
+          console.error("Poll fetch error:", pollErr.message);
+        }
+      }
+    }
+
+    if (!imageUrl) {
+      console.error("Could not find image URL in response:", initResult);
+      return res.status(500).json({ error: "Image generation timed out" });
+    }
+
+    console.log("Found image URL:", imageUrl);
 
     // Download the generated image from Picsart CDN
     const imageResponse = await fetch(imageUrl);
