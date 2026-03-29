@@ -3,7 +3,7 @@ import { useUser, useAuth, UserButton } from "@clerk/clerk-react";
 import { Sparkles, Download, RefreshCw, Trash2, Image as ImageIcon, Calendar, User, X } from "lucide-react";
 
 const STYLES = ["Photorealistic", "Anime", "Oil Painting", "Pixel Art", "Watercolor", "Cinematic"];
-const API_URL = import.meta.env.VITE_API_URL || "http://localhost:3001/api";
+const API_URL = import.meta.env.VITE_API_URL || (import.meta.env.DEV ? "http://localhost:3001/api" : "/api");
 
 export default function Dashboard() {
   const { user } = useUser();
