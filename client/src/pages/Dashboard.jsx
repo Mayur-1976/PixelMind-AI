@@ -1,9 +1,84 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useUser, useAuth, UserButton } from "@clerk/clerk-react";
-import { Sparkles, Download, RefreshCw, Trash2, Image as ImageIcon, Calendar, User, X } from "lucide-react";
+import { Sparkles, Download, RefreshCw, Trash2, Image as ImageIcon, Calendar, User, X, Zap, TrendingUp, Wand2, Eye } from "lucide-react";
+import ThemeSwitcher from "../components/ThemeSwitcher";
+import { ParticleBackground } from "../App";
 
-const STYLES = ["Photorealistic", "Anime", "Oil Painting", "Pixel Art", "Watercolor", "Cinematic"];
+const STYLES = [
+  { name: "Photorealistic", icon: "📸" },
+  { name: "Anime", icon: "🎌" },
+  { name: "Oil Painting", icon: "🎨" },
+  { name: "Pixel Art", icon: "👾" },
+  { name: "Watercolor", icon: "💧" },
+  { name: "Cinematic", icon: "🎬" },
+];
+
 const API_URL = import.meta.env.VITE_API_URL || (import.meta.env.DEV ? "http://localhost:3001/api" : "/api");
+
+/* ── Animated Counter Hook ── */
+function useAnimatedCounter(target, duration = 800) {
+  const [count, setCount] = useState(0);
+  const prevTarget = useRef(0);
+
+  useEffect(() => {
+    const start = prevTarget.current;
+    const diff = target - start;
+    if (diff === 0) return;
+
+    const startTime = performance.now();
+    const animate = (now) => {
+      const elapsed = now - startTime;
+      const progress = Math.min(elapsed / duration, 1);
+      // Ease out cubic
+      const eased = 1 - Math.pow(1 - progress, 3);
+      setCount(Math.round(start + diff * eased));
+      if (progress < 1) requestAnimationFrame(animate);
+    };
+    requestAnimationFrame(animate);
+    prevTarget.current = target;
+  }, [target, duration]);
+
+  return count;
+}
+
+/* ── Typing Animation ── */
+function TypingText({ texts, speed = 80, pause = 2000 }) {
+  const [displayed, setDisplayed] = useState("");
+  const [textIndex, setTextIndex] = useState(0);
+  const [charIndex, setCharIndex] = useState(0);
+  const [isDeleting, setIsDeleting] = useState(false);
+
+  useEffect(() => {
+    const currentText = texts[textIndex];
+    let timeout;
+
+    if (!isDeleting && charIndex < currentText.length) {
+      timeout = setTimeout(() => {
+        setDisplayed(currentText.slice(0, charIndex + 1));
+        setCharIndex(charIndex + 1);
+      }, speed);
+    } else if (!isDeleting && charIndex === currentText.length) {
+      timeout = setTimeout(() => setIsDeleting(true), pause);
+    } else if (isDeleting && charIndex > 0) {
+      timeout = setTimeout(() => {
+        setDisplayed(currentText.slice(0, charIndex - 1));
+        setCharIndex(charIndex - 1);
+      }, speed / 2);
+    } else if (isDeleting && charIndex === 0) {
+      setIsDeleting(false);
+      setTextIndex((textIndex + 1) % texts.length);
+    }
+
+    return () => clearTimeout(timeout);
+  }, [charIndex, isDeleting, textIndex, texts, speed, pause]);
+
+  return (
+    <span>
+      {displayed}
+      <span className="inline-block w-[2px] h-[1em] ml-0.5 align-middle" style={{ background: 'var(--pm-primary)', animation: 'blink 1s step-end infinite' }} />
+    </span>
+  );
+}
 
 export default function Dashboard() {
   const { user } = useUser();
@@ -20,9 +95,18 @@ export default function Dashboard() {
   const [fullScreenImage, setFullScreenImage] = useState(null);
   const [toast, setToast] = useState(null);
 
+  const totalCount = useAnimatedCounter(generations.length);
+
+  const thisMonthCount = generations.filter(g => {
+    const date = new Date(g.created_at);
+    const now = new Date();
+    return date.getMonth() === now.getMonth() && date.getFullYear() === now.getFullYear();
+  }).length;
+  const monthCount = useAnimatedCounter(thisMonthCount);
+
   const showToast = (message, type = "success") => {
     setToast({ message, type });
-    setTimeout(() => setToast(null), 3000);
+    setTimeout(() => setToast(null), 3500);
   };
 
   const fetchGenerations = async () => {
@@ -42,9 +126,7 @@ export default function Dashboard() {
     }
   };
 
-  useEffect(() => {
-    fetchGenerations();
-  }, []);
+  useEffect(() => { fetchGenerations(); }, []);
 
   const handleGenerate = async () => {
     if (!prompt.trim()) return;
@@ -52,24 +134,14 @@ export default function Dashboard() {
     setGeneratedImage(null);
     try {
       const token = await getToken();
-      
-      // Step 1: Start generation
       const res = await fetch(`${API_URL}/generate`, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Authorization": `Bearer ${token}`
-        },
-        body: JSON.stringify({
-          prompt,
-          style: selectedStyle,
-        })
+        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${token}` },
+        body: JSON.stringify({ prompt, style: selectedStyle })
       });
-      
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Generation failed");
       
-      // If image was ready instantly
       if (data.imageUrl) {
         setGeneratedImage(data);
         showToast("✨ Image generated!", "success");
@@ -77,47 +149,29 @@ export default function Dashboard() {
         return;
       }
       
-      // Step 2: Image still processing — poll for result
       if (data.status === "processing" && data.inferenceId) {
-        showToast("⏳ Generating your image...", "neutral");
-        
+        showToast("⏳ AI is painting...", "neutral");
         for (let i = 0; i < 40; i++) {
           await new Promise(r => setTimeout(r, 3000));
-          
           const pollRes = await fetch(`${API_URL}/generate-status`, {
             method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              "Authorization": `Bearer ${token}`
-            },
-            body: JSON.stringify({
-              inferenceId: data.inferenceId,
-              prompt,
-              style: selectedStyle,
-            })
+            headers: { "Content-Type": "application/json", "Authorization": `Bearer ${token}` },
+            body: JSON.stringify({ inferenceId: data.inferenceId, prompt, style: selectedStyle })
           });
-          
           const pollData = await pollRes.json();
-          
           if (pollData.status === "completed") {
             setGeneratedImage(pollData);
             showToast("✨ Image generated!", "success");
             fetchGenerations();
             return;
           }
-          
-          if (pollData.status === "failed") {
-            throw new Error("Image generation failed");
-          }
-          
-          // Still processing — continue polling
+          if (pollData.status === "failed") throw new Error("Image generation failed");
         }
-        
-        throw new Error("Image generation timed out — please try again");
+        throw new Error("Timed out — try again");
       }
     } catch (err) {
       console.error(err);
-      showToast(err.message || "❌ Error generating image", "error");
+      showToast(err.message || "❌ Error generating", "error");
     } finally {
       setIsGenerating(false);
     }
@@ -133,9 +187,8 @@ export default function Dashboard() {
       document.body.appendChild(a);
       a.click();
       a.remove();
-    } catch (err) {
-      showToast("Failed to download", "error");
-    }
+      showToast("📥 Downloaded!", "success");
+    } catch { showToast("Failed to download", "error"); }
   };
 
   const handleDelete = async (id) => {
@@ -146,207 +199,342 @@ export default function Dashboard() {
         headers: { Authorization: `Bearer ${token}` }
       });
       if (!res.ok) throw new Error("Delete failed");
-      
       setGenerations(prev => prev.filter(g => g.id !== id));
-      if (generatedImage?.generation?.id === id) {
-        setGeneratedImage(null);
-      }
+      if (generatedImage?.generation?.id === id) setGeneratedImage(null);
       showToast("🗑 Deleted", "neutral");
-    } catch (err) {
-      showToast("Failed to delete", "error");
-    }
+    } catch { showToast("Failed to delete", "error"); }
   };
 
-  const thisMonthCount = generations.filter(g => {
-    const date = new Date(g.created_at);
-    const now = new Date();
-    return date.getMonth() === now.getMonth() && date.getFullYear() === now.getFullYear();
-  }).length;
+  // Ripple effect handler for generate button
+  const handleRipple = (e) => {
+    const btn = e.currentTarget;
+    const rect = btn.getBoundingClientRect();
+    const ripple = document.createElement("span");
+    const size = Math.max(rect.width, rect.height);
+    ripple.style.width = ripple.style.height = `${size}px`;
+    ripple.style.left = `${e.clientX - rect.left - size / 2}px`;
+    ripple.style.top = `${e.clientY - rect.top - size / 2}px`;
+    ripple.className = "ripple";
+    btn.appendChild(ripple);
+    setTimeout(() => ripple.remove(), 600);
+  };
 
   return (
-    <div className="min-h-screen bg-[#0a0a0f] text-[#f1f5f9] w-full flex flex-col items-center">
-      {/* Toast Notification */}
+    <div style={{ minHeight: '100vh', width: '100%', display: 'flex', flexDirection: 'column', background: 'var(--pm-bg-base)', color: 'var(--pm-text-primary)' }}>
+      {/* Particle system */}
+      <ParticleBackground />
+
+      {/* Aurora */}
+      <div className="aurora-bg">
+        <div className="aurora-blob aurora-blob-1" />
+        <div className="aurora-blob aurora-blob-2" />
+        <div className="aurora-blob aurora-blob-3" />
+      </div>
+
+      {/* Grid */}
+      <div className="grid-overlay" />
+
+      {/* Toast */}
       {toast && (
-        <div className={`fixed top-4 right-4 px-4 py-3 rounded-lg shadow-lg z-50 flex items-center gap-2 transition-all 
-          ${toast.type === 'error' ? 'bg-[#ef4444] text-white' : 
-            toast.type === 'neutral' ? 'bg-[#64748b] text-white' : 
-            'bg-[#10b981] text-white'}`}>
+        <div className={`toast ${toast.type === 'error' ? 'toast-error' : toast.type === 'neutral' ? 'toast-neutral' : 'toast-success'}`}
+          style={{ 
+            position: 'fixed', top: '20px', right: '20px', padding: '12px 20px', borderRadius: '12px', zIndex: 100,
+            display: 'flex', alignItems: 'center', gap: '12px', fontWeight: 500, fontSize: '0.875rem',
+            color: toast.type === 'neutral' ? 'var(--pm-text-primary)' : 'white'
+          }}
+        >
           {toast.message}
         </div>
       )}
 
-      {/* Header */}
-      <header className="w-full max-w-7xl mx-auto px-6 py-4 flex items-center justify-between border-b border-[#1e1e2e]">
-        <div className="flex items-center gap-2">
-          <Sparkles className="w-6 h-6 text-[#7c3aed]" />
-          <h1 className="text-xl font-bold font-heading tracking-tight">PixelMind AI</h1>
+      {/* ═══ HEADER ═══ */}
+      <header className="glass-header" style={{ position: 'sticky', top: 0, zIndex: 50, width: '100%' }}>
+        <div style={{ maxWidth: '1100px', margin: '0 auto', padding: '12px 32px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+            <div>
+              <div className="animate-pulse-glow" style={{ width: '40px', height: '40px', borderRadius: '12px', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'linear-gradient(135deg, var(--pm-gradient-start), var(--pm-gradient-end))' }}>
+                <Sparkles style={{ width: '20px', height: '20px', color: 'white' }} />
+              </div>
+            </div>
+            <div>
+              <h1 className="gradient-text" style={{ fontSize: '1.2rem', fontWeight: 700, fontFamily: "'Space Grotesk', sans-serif", letterSpacing: '-0.01em' }}>
+                PixelMind AI
+              </h1>
+            </div>
+          </div>
+          
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+            <ThemeSwitcher />
+            <UserButton />
+          </div>
         </div>
-        <UserButton appearance={{ elements: { avatarBox: "w-10 h-10 border-2 border-[#1e1e2e]" } }} />
       </header>
 
-      <main className="w-full max-w-7xl mx-auto px-6 py-8 flex flex-col gap-12">
+      <main style={{ position: 'relative', zIndex: 10, width: '100%', maxWidth: '1100px', margin: '0 auto', padding: '20px 32px', display: 'flex', flexDirection: 'column', gap: '24px' }}>
         
-        {/* Usage Stats (Top) */}
-        <section className="flex flex-wrap gap-4 text-sm text-[#64748b]">
-          <div className="flex items-center gap-2 bg-[#13131a] px-4 py-2 rounded-full border border-[#1e1e2e]">
-            <ImageIcon className="w-4 h-4 text-[#06b6d4]" />
-            <span>Total Images: {generations.length}</span>
-          </div>
-          <div className="flex items-center gap-2 bg-[#13131a] px-4 py-2 rounded-full border border-[#1e1e2e]">
-            <Calendar className="w-4 h-4 text-[#7c3aed]" />
-            <span>Generated This Month: {thisMonthCount}</span>
-          </div>
-          <div className="flex items-center gap-2 bg-[#13131a] px-4 py-2 rounded-full border border-[#1e1e2e]">
-            <User className="w-4 h-4 text-[#f1f5f9]" />
-            <span>{user?.primaryEmailAddress?.emailAddress}</span>
-          </div>
+        {/* ═══ HERO SECTION ═══ */}
+        <section className="animate-slide-up" style={{ animationDelay: '0.05s', opacity: 0, animationFillMode: 'forwards', textAlign: 'center', padding: '8px 0' }}>
+          <h2 style={{ fontSize: '1.875rem', fontWeight: 700, marginBottom: '6px', fontFamily: "'Space Grotesk', sans-serif" }}>
+            <span style={{ color: 'var(--pm-text-primary)' }}>Create </span>
+            <span className="gradient-text">
+              <TypingText texts={["Stunning Art", "Anime Worlds", "Dreamy Scenes", "Epic Visuals", "Pixel Magic"]} speed={90} pause={2500} />
+            </span>
+          </h2>
+          <p style={{ color: 'var(--pm-text-muted)', fontSize: '0.8rem', maxWidth: '28rem', margin: '0 auto' }}>
+            Transform your imagination into breathtaking visuals with AI
+          </p>
         </section>
 
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 lg:gap-12">
-          {/* Generator Section */}
-          <section className="flex flex-col gap-6 bg-[#13131a] p-6 lg:p-8 rounded-2xl border border-[#1e1e2e] shadow-lg">
-            <div>
-              <h2 className="text-2xl font-heading font-semibold mb-2">Create an Image</h2>
-              <p className="text-[#64748b] text-sm">Describe what you want to see, and AI will generate it for you.</p>
+        {/* ═══ STATS ═══ */}
+        <section className="animate-slide-up" style={{ animationDelay: '0.1s', opacity: 0, animationFillMode: 'forwards', display: 'flex', flexWrap: 'wrap', gap: '12px', justifyContent: 'center' }}>
+          {[
+            { icon: <ImageIcon className="w-4 h-4 text-white" />, label: "Total Created", value: totalCount, gradient: 'linear-gradient(135deg, var(--pm-accent), var(--pm-accent-light))' },
+            { icon: <TrendingUp className="w-4 h-4 text-white" />, label: "This Month", value: monthCount, gradient: 'linear-gradient(135deg, var(--pm-primary), var(--pm-primary-light))' },
+            { icon: <User className="w-4 h-4 text-white" />, label: "Account", value: null, gradient: 'linear-gradient(135deg, var(--pm-gradient-start), var(--pm-gradient-end))' },
+          ].map((stat, i) => (
+            <div key={i} className="stat-card" style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '10px 20px', borderRadius: '12px' }}>
+              <div style={{ width: '36px', height: '36px', borderRadius: '10px', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, background: stat.gradient }}>
+                {stat.icon}
+              </div>
+              <div style={{ minWidth: 0 }}>
+                <p style={{ fontSize: '10px', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--pm-text-muted)' }}>{stat.label}</p>
+                {stat.value !== null ? (
+                  <p style={{ fontSize: '1.125rem', fontWeight: 700, fontFamily: "'Space Grotesk', sans-serif", color: 'var(--pm-text-primary)' }}>{stat.value}</p>
+                ) : (
+                  <p style={{ fontSize: '0.75rem', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '140px', color: 'var(--pm-text-secondary)' }}>{user?.primaryEmailAddress?.emailAddress}</p>
+                )}
+              </div>
+            </div>
+          ))}
+        </section>
+
+        {/* ═══ MAIN GRID ═══ */}
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', alignItems: 'start' }}>
+          
+          {/* ── Generator ── */}
+          <section className="glass-card animate-slide-up" style={{ animationDelay: '0.15s', opacity: 0, animationFillMode: 'forwards', padding: '28px', borderRadius: '16px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+              <div style={{ width: '40px', height: '40px', borderRadius: '12px', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'linear-gradient(135deg, var(--pm-gradient-start), var(--pm-gradient-mid))' }}>
+                <Wand2 className="w-5 h-5 text-white" />
+              </div>
+              <div>
+                <h2 style={{ fontSize: '1.125rem', fontWeight: 700, fontFamily: "'Space Grotesk', sans-serif", color: 'var(--pm-text-primary)' }}>Create Magic</h2>
+                <p style={{ fontSize: '0.75rem', color: 'var(--pm-text-muted)' }}>Describe your vision below</p>
+              </div>
             </div>
             
-            <div className="relative">
+            {/* Prompt */}
+            <div style={{ position: 'relative' }}>
               <textarea
                 value={prompt}
                 onChange={e => setPrompt(e.target.value)}
                 maxLength={1000}
-                placeholder="A futuristic cyber city bathed in neon pink and cyan lights, highly detailed..."
-                className="w-full bg-[#0a0a0f] border border-[#1e1e2e] rounded-xl p-4 text-[#f1f5f9] resize-none h-40 focus:outline-none focus:border-[#7c3aed] focus:ring-1 focus:ring-[#7c3aed] transition-all"
+                placeholder="A futuristic cyber city bathed in neon pink and cyan lights, highly detailed, 8k resolution..."
+                className="glow-input"
+                id="prompt-input"
+                style={{ width: '100%', borderRadius: '12px', padding: '12px', resize: 'none', height: '96px', fontSize: '0.875rem', lineHeight: '1.625' }}
               />
-              <span className="absolute bottom-3 right-3 text-xs text-[#64748b]">
-                {prompt.length}/1000
-              </span>
+              <div style={{ position: 'absolute', bottom: '10px', right: '10px' }}>
+                <span style={{ fontSize: '10px', fontFamily: 'monospace', padding: '2px 8px', borderRadius: '12px', background: 'var(--pm-bg-elevated)', color: 'var(--pm-text-muted)' }}>
+                  {prompt.length}/1000
+                </span>
+              </div>
             </div>
 
-            <div className="flex flex-col gap-3">
-              <span className="text-sm text-[#64748b] font-medium">Style Presets</span>
-              <div className="flex flex-wrap gap-2">
+            {/* Styles */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+              <span style={{ fontSize: '10px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.1em', color: 'var(--pm-text-muted)' }}>
+                ✦ Style Preset
+              </span>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
                 {STYLES.map(style => (
                   <button
-                    key={style}
-                    onClick={() => setSelectedStyle(style === selectedStyle ? "" : style)}
-                    className={`px-4 py-1.5 rounded-full text-xs font-medium transition-all hover:scale-105 ${
-                      selectedStyle === style 
-                        ? "bg-[#7c3aed] text-white shadow-[0_0_10px_rgba(124,58,237,0.5)]" 
-                        : "bg-[#0a0a0f] border border-[#1e1e2e] text-[#64748b] hover:border-[#7c3aed] hover:text-[#f1f5f9]"
-                    }`}
+                    key={style.name}
+                    onClick={() => setSelectedStyle(style.name === selectedStyle ? "" : style.name)}
+                    className={`style-pill ${selectedStyle === style.name ? "active" : ""}`}
+                    id={`style-${style.name.toLowerCase().replace(/\s/g, '-')}`}
+                    style={{ padding: '6px 12px', borderRadius: '8px', fontSize: '11px', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '4px', cursor: 'pointer' }}
                   >
-                    {style}
+                    <span style={{ fontSize: '12px' }}>{style.icon}</span>
+                    {style.name}
                   </button>
                 ))}
               </div>
             </div>
 
+            {/* Generate */}
             <button
-              onClick={handleGenerate}
+              onClick={(e) => { handleRipple(e); handleGenerate(); }}
               disabled={isGenerating || !prompt.trim()}
-              className="mt-2 w-full py-3.5 bg-gradient-to-r from-[#7c3aed] to-[#06b6d4] text-white rounded-xl font-bold flex items-center justify-center gap-2 transition-all hover:scale-[1.02] hover:shadow-[0_0_20px_rgba(124,58,237,0.4)] disabled:opacity-50 disabled:hover:scale-100 disabled:hover:shadow-none"
+              className="btn-primary"
+              id="generate-btn"
+              style={{ width: '100%', padding: '12px', borderRadius: '12px', fontSize: '0.875rem', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '10px', position: 'relative', overflow: 'hidden', cursor: 'pointer' }}
             >
               {isGenerating ? (
                 <>
-                  <RefreshCw className="w-5 h-5 animate-spin" />
-                  Generating...
+                  <RefreshCw className="w-4 h-4 animate-spin" />
+                  <span>AI is creating...</span>
                 </>
               ) : (
                 <>
-                  <Sparkles className="w-5 h-5" />
-                  Generate Image
+                  <Sparkles className="w-4 h-4" />
+                  <span>Generate Masterpiece</span>
                 </>
               )}
             </button>
           </section>
 
-          {/* Image Output Area */}
-          <section className="flex flex-col bg-[#13131a] p-6 lg:p-8 rounded-2xl border border-[#1e1e2e] shadow-lg min-h-[400px]">
-            <h2 className="text-2xl font-heading font-semibold mb-6">Result</h2>
+          {/* ── Result ── */}
+          <section className="glass-card animate-slide-up" style={{ animationDelay: '0.2s', opacity: 0, animationFillMode: 'forwards', padding: '28px', borderRadius: '16px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+              <div style={{ width: '40px', height: '40px', borderRadius: '12px', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'linear-gradient(135deg, var(--pm-accent), var(--pm-accent-light))' }}>
+                <Eye className="w-5 h-5 text-white" />
+              </div>
+              <div>
+                <h2 style={{ fontSize: '1.125rem', fontWeight: 700, fontFamily: "'Space Grotesk', sans-serif", color: 'var(--pm-text-primary)' }}>Result</h2>
+                <p style={{ fontSize: '0.75rem', color: 'var(--pm-text-muted)' }}>Your AI creation appears here</p>
+              </div>
+            </div>
             
-            <div className="flex-1 flex flex-col items-center justify-center border-2 border-dashed border-[#1e1e2e] rounded-xl overflow-hidden bg-[#0a0a0f] relative group">
+            <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', borderRadius: '12px', overflow: 'hidden', position: 'relative', minHeight: '200px', border: '2px dashed var(--pm-glass-border)', background: 'var(--pm-bg-base)' }}>
               {isGenerating ? (
-                <div className="absolute inset-0 bg-gradient-to-r from-[#0a0a0f] via-[#1e1e2e] to-[#0a0a0f] bg-[length:200%_100%] animate-pulse" />
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '16px', padding: '24px' }}>
+                  <div style={{ position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                    <div className="generating-orb">
+                      <Sparkles style={{ width: '28px', height: '28px', color: 'white', filter: 'drop-shadow(0 0 8px rgba(255,255,255,0.5))' }} />
+                    </div>
+                    <div className="generating-ring" />
+                    <div className="generating-ring-2" />
+                  </div>
+                  <div style={{ textAlign: 'center' }}>
+                    <p className="gradient-text" style={{ fontFamily: "'Space Grotesk', sans-serif", fontWeight: 700, fontSize: '0.875rem' }}>Creating your masterpiece...</p>
+                    <p style={{ fontSize: '11px', marginTop: '4px', color: 'var(--pm-text-muted)' }}>AI is painting pixel by pixel</p>
+                  </div>
+                  <div style={{ width: '176px', height: '4px', borderRadius: '9999px', overflow: 'hidden', background: 'var(--pm-bg-elevated)' }}>
+                    <div style={{ 
+                      height: '100%', borderRadius: '9999px',
+                      background: 'linear-gradient(90deg, var(--pm-gradient-start), var(--pm-gradient-mid), var(--pm-gradient-end), var(--pm-gradient-start))',
+                      backgroundSize: '200% 100%',
+                      width: '100%',
+                      animation: 'shimmer 1.5s ease-in-out infinite'
+                    }} />
+                  </div>
+                </div>
               ) : generatedImage ? (
                 <img 
                   src={generatedImage.imageUrl} 
-                  alt="Generated result" 
-                  className="w-full h-full object-contain animate-in fade-in duration-700"
+                  alt="Generated" 
+                  className="animate-scale-in"
+                  onClick={() => setFullScreenImage(generatedImage.imageUrl)}
+                  style={{ width: '100%', height: '100%', objectFit: 'contain', cursor: 'pointer', filter: 'drop-shadow(0 0 20px var(--pm-glow-primary))' }}
                 />
               ) : (
-                <div className="flex flex-col items-center text-[#64748b] gap-3">
-                  <ImageIcon className="w-12 h-12 opacity-50" />
-                  <p className="text-sm">Your generation will appear here</p>
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '12px', padding: '24px' }}>
+                  <div className="animate-float" style={{ width: '56px', height: '56px', borderRadius: '12px', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--pm-bg-elevated)', border: '1px dashed var(--pm-glass-border)' }}>
+                    <ImageIcon style={{ width: '28px', height: '28px', color: 'var(--pm-text-muted)', opacity: 0.4 }} />
+                  </div>
+                  <div style={{ textAlign: 'center' }}>
+                    <p style={{ fontSize: '0.875rem', fontFamily: "'Space Grotesk', sans-serif", fontWeight: 600, color: 'var(--pm-text-secondary)' }}>Ready to create</p>
+                    <p style={{ fontSize: '0.75rem', marginTop: '2px', color: 'var(--pm-text-muted)' }}>Enter a prompt and hit generate</p>
+                  </div>
                 </div>
               )}
             </div>
 
             {generatedImage && !isGenerating && (
-              <div className="flex gap-4 mt-6">
+              <div className="animate-slide-up" style={{ display: 'flex', gap: '10px' }}>
                 <button 
                   onClick={() => handleDownload(generatedImage.imageUrl, `generation-${generatedImage.generation?.id}.png`)}
-                  className="flex-1 py-2.5 bg-[#0a0a0f] border border-[#1e1e2e] hover:border-[#7c3aed] hover:text-[#7c3aed] rounded-lg font-medium flex items-center justify-center gap-2 transition-all hover:scale-[1.02]"
+                  className="btn-ghost"
+                  id="download-btn"
+                  style={{ flex: 1, padding: '10px', borderRadius: '12px', fontSize: '0.75rem', fontWeight: 600, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', cursor: 'pointer' }}
                 >
-                  <Download className="w-4 h-4" /> Download
+                  <Download style={{ width: '14px', height: '14px' }} /> Download
                 </button>
                 <button 
                   onClick={handleGenerate}
-                  className="flex-1 py-2.5 bg-[#0a0a0f] border border-[#1e1e2e] hover:border-[#06b6d4] hover:text-[#06b6d4] rounded-lg font-medium flex items-center justify-center gap-2 transition-all hover:scale-[1.02]"
+                  className="btn-ghost"
+                  id="regenerate-btn"
+                  style={{ flex: 1, padding: '10px', borderRadius: '12px', fontSize: '0.75rem', fontWeight: 600, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', cursor: 'pointer' }}
                 >
-                  <RefreshCw className="w-4 h-4" /> Regenerate
+                  <RefreshCw style={{ width: '14px', height: '14px' }} /> Regenerate
                 </button>
                 <button 
                   onClick={() => handleDelete(generatedImage.generation?.id)}
-                  className="flex-1 py-2.5 bg-[#0a0a0f] border border-[#1e1e2e] hover:border-[#ef4444] hover:text-[#ef4444] rounded-lg font-medium flex items-center justify-center gap-2 transition-all hover:scale-[1.02]"
+                  className="btn-ghost"
+                  id="delete-result-btn"
+                  style={{ flex: 1, padding: '10px', borderRadius: '12px', fontSize: '0.75rem', fontWeight: 600, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', cursor: 'pointer' }}
                 >
-                  <Trash2 className="w-4 h-4" /> Delete
+                  <Trash2 style={{ width: '14px', height: '14px' }} /> Delete
                 </button>
               </div>
             )}
           </section>
         </div>
 
-        {/* My Gallery */}
-        <section className="mt-8">
-          <div className="flex items-center justify-between mb-8">
-            <h2 className="text-2xl font-heading font-bold">My Gallery</h2>
+        {/* ═══ GALLERY ═══ */}
+        <section className="glass-card animate-slide-up" style={{ animationDelay: '0.25s', opacity: 0, animationFillMode: 'forwards', padding: '28px', borderRadius: '16px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '20px' }}>
+            <ImageIcon style={{ width: '20px', height: '20px', color: 'var(--pm-primary)' }} />
+            <h2 style={{ fontSize: '1.1rem', fontWeight: 700, fontFamily: "'Space Grotesk', sans-serif", color: 'var(--pm-text-primary)' }}>
+              My Gallery
+            </h2>
+            <span style={{ fontSize: '10px', fontWeight: 700, letterSpacing: '0.05em', padding: '2px 10px', borderRadius: '9999px', background: 'linear-gradient(135deg, var(--pm-gradient-start), var(--pm-gradient-end))', color: 'white' }}>
+              {generations.length}
+            </span>
           </div>
           
           {isLoadingGallery ? (
-            <div className="flex gap-4 h-32 items-center justify-center text-[#64748b]">
-              <RefreshCw className="w-6 h-6 animate-spin" />
-              <span>Loading gallery...</span>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '12px' }}>
+              {[...Array(4)].map((_, i) => (
+                <div key={i} className="shimmer" style={{ aspectRatio: '1', borderRadius: '12px', animationDelay: `${i * 0.1}s` }} />
+              ))}
             </div>
           ) : generations.length === 0 ? (
-            <div className="text-center py-16 bg-[#13131a] rounded-2xl border border-[#1e1e2e] text-[#64748b]">
-              <p>No images generated yet. Start creating!</p>
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', textAlign: 'center', padding: '40px 20px', borderRadius: '12px', border: '2px dashed var(--pm-glass-border)', background: 'var(--pm-bg-base)' }}>
+              <div className="animate-float" style={{ width: '48px', height: '48px', marginBottom: '12px', borderRadius: '12px', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--pm-bg-elevated)', border: '1px dashed var(--pm-glass-border)' }}>
+                <ImageIcon style={{ width: '24px', height: '24px', color: 'var(--pm-text-muted)', opacity: 0.4 }} />
+              </div>
+              <p style={{ fontFamily: "'Space Grotesk', sans-serif", fontWeight: 700, fontSize: '0.875rem', color: 'var(--pm-text-secondary)' }}>Your gallery awaits</p>
+              <p style={{ fontSize: '0.75rem', marginTop: '4px', maxWidth: '280px', color: 'var(--pm-text-muted)' }}>
+                Generate your first image and it will appear here
+              </p>
             </div>
           ) : (
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
-              {generations.map(gen => (
+            <div className="stagger-children" style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '16px' }}>
+              {generations.map((gen) => (
                 <div 
                   key={gen.id} 
-                  className="group relative aspect-square bg-[#13131a] rounded-xl overflow-hidden border border-[#1e1e2e] cursor-pointer"
+                  className="gallery-card animate-slide-up"
                   onClick={() => setFullScreenImage(gen.image_url)}
+                  style={{ aspectRatio: '1', borderRadius: '12px', cursor: 'pointer', overflow: 'hidden' }}
                 >
-                  <img src={gen.image_url} alt={gen.prompt} className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-110" />
+                  <img src={gen.image_url} alt={gen.prompt} style={{ width: '100%', height: '100%', objectFit: 'cover' }} loading="lazy" />
                   
-                  {/* Hover Overlay */}
-                  <div className="absolute inset-0 bg-black/70 opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex flex-col justify-between p-4">
-                    <div className="flex justify-end pt-1">
+                  <div className="gallery-overlay">
+                    <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '6px' }}>
+                      <button 
+                        onClick={(e) => { e.stopPropagation(); handleDownload(gen.image_url, `pixelmind-${gen.id}.png`); }}
+                        className="gallery-action-btn"
+                      >
+                        <Download style={{ width: '14px', height: '14px' }} />
+                      </button>
                       <button 
                         onClick={(e) => { e.stopPropagation(); handleDelete(gen.id); }}
-                        className="p-1.5 bg-[#ef4444]/20 text-[#ef4444] rounded-md hover:bg-[#ef4444] hover:text-white transition-colors"
+                        className="gallery-action-btn delete"
                       >
-                        <Trash2 className="w-4 h-4" />
+                        <Trash2 style={{ width: '14px', height: '14px' }} />
                       </button>
                     </div>
                     <div>
-                      <p className="text-xs text-[#f1f5f9] line-clamp-3 mb-2">{gen.prompt}</p>
-                      <div className="flex items-center justify-between text-[10px] text-[#64748b]">
-                        <span>{new Date(gen.created_at).toLocaleDateString()}</span>
-                        {gen.style && <span className="px-2 py-0.5 bg-[#7c3aed]/20 text-[#7c3aed] rounded-full">{gen.style}</span>}
+                      <p style={{ fontSize: '11px', color: 'rgba(255,255,255,0.9)', fontWeight: 500, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden', marginBottom: '8px' }}>{gen.prompt}</p>
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '9px' }}>
+                        <span style={{ color: 'rgba(255,255,255,0.4)', fontFamily: 'monospace' }}>{new Date(gen.created_at).toLocaleDateString()}</span>
+                        {gen.style && (
+                          <span style={{ padding: '2px 8px', borderRadius: '9999px', fontSize: '9px', fontWeight: 700, color: 'rgba(255,255,255,0.9)', background: 'linear-gradient(135deg, var(--pm-gradient-start), var(--pm-gradient-end))' }}>
+                            {gen.style}
+                          </span>
+                        )}
                       </div>
                     </div>
                   </div>
@@ -355,26 +543,55 @@ export default function Dashboard() {
             </div>
           )}
         </section>
+
+        {/* ═══ FOOTER ═══ */}
+        <footer style={{ textAlign: 'center', padding: '20px 0', marginTop: '8px', position: 'relative' }}>
+          <div style={{ position: 'absolute', left: 0, right: 0, top: 0, height: '1px', background: 'linear-gradient(to right, transparent, var(--pm-glass-border), var(--pm-primary), var(--pm-glass-border), transparent)' }} />
+          <p style={{ fontSize: '0.75rem', fontWeight: 500, color: 'var(--pm-text-muted)' }}>
+            Built with <span className="gradient-text" style={{ fontWeight: 700 }}>✦ PixelMind AI</span> — Powered by advanced AI
+          </p>
+        </footer>
       </main>
 
-      {/* Lightbox Modal */}
+      {/* ═══ LIGHTBOX ═══ */}
       {fullScreenImage && (
         <div 
-          className="fixed inset-0 z-50 bg-black/90 flex items-center justify-center p-4 backdrop-blur-sm"
+          className="lightbox-backdrop"
+          style={{ position: 'fixed', inset: 0, zIndex: 60, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px' }}
           onClick={() => setFullScreenImage(null)}
         >
           <button 
-            className="absolute top-6 right-6 p-2 text-white/70 hover:text-white transition-colors"
+            style={{ position: 'absolute', top: '24px', right: '24px', padding: '10px', borderRadius: '12px', color: 'rgba(255,255,255,0.5)', background: 'rgba(255,255,255,0.06)', backdropFilter: 'blur(10px)', border: '1px solid rgba(255,255,255,0.08)', cursor: 'pointer', transition: 'all 0.3s' }}
             onClick={() => setFullScreenImage(null)}
+            id="close-lightbox-btn"
           >
-            <X className="w-8 h-8" />
+            <X style={{ width: '24px', height: '24px' }} />
           </button>
-          <img 
-            src={fullScreenImage} 
-            alt="Full screen view" 
-            className="max-w-full max-h-[90vh] object-contain rounded-lg shadow-2xl" 
-            onClick={e => e.stopPropagation()} 
-          />
+          
+          <div className="lightbox-image" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '20px' }} onClick={e => e.stopPropagation()}>
+            <img 
+              src={fullScreenImage} 
+              alt="Full screen" 
+              style={{ maxWidth: '100%', maxHeight: '82vh', objectFit: 'contain', borderRadius: '16px', boxShadow: '0 25px 80px rgba(0,0,0,0.6), 0 0 40px var(--pm-glow-primary)' }}
+            />
+            <div style={{ display: 'flex', gap: '12px' }}>
+              <button
+                onClick={() => handleDownload(fullScreenImage, 'pixelmind-art.png')}
+                className="btn-ghost"
+                style={{ padding: '10px 24px', borderRadius: '12px', fontSize: '0.875rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '8px', color: 'white', borderColor: 'rgba(255,255,255,0.15)', cursor: 'pointer' }}
+                id="lightbox-download-btn"
+              >
+                <Download style={{ width: '16px', height: '16px' }} /> Download HD
+              </button>
+              <button
+                onClick={() => setFullScreenImage(null)}
+                className="btn-ghost"
+                style={{ padding: '10px 24px', borderRadius: '12px', fontSize: '0.875rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '8px', color: 'white', borderColor: 'rgba(255,255,255,0.15)', cursor: 'pointer' }}
+              >
+                <X style={{ width: '16px', height: '16px' }} /> Close
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>
