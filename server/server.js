@@ -14,11 +14,13 @@ app.use(cors({ origin: CORS_ORIGIN, credentials: true }));
 
 // Health check
 app.get("/api/health", (req, res) => {
+  // Only report boolean presence — never leak key values or prefixes
   res.json({
     ok: true,
-    supabaseUrl: process.env.SUPABASE_URL ? "set" : "MISSING",
-    supabaseKey: process.env.SUPABASE_SERVICE_ROLE_KEY ? process.env.SUPABASE_SERVICE_ROLE_KEY.slice(0, 10) + "..." : "MISSING",
-    picsartKey: process.env.PICSART_API_KEY ? "set" : "MISSING",
+    supabaseUrl: !!process.env.SUPABASE_URL,
+    supabaseKey: !!process.env.SUPABASE_SERVICE_ROLE_KEY,
+    picsartKey: !!process.env.PICSART_API_KEY,
+    clerkKey: !!process.env.CLERK_SECRET_KEY,
   });
 });
 app.use(express.json());
